@@ -1,0 +1,479 @@
+# SanAntonioSafe Android API Guide
+
+Backend API guide for the SanAntonioSafe Android app.
+
+The backend is role-based. Use the section that matches the signed-in user's role:
+
+- `resident` - reports incidents, uploads photos, receives alerts.
+- `responder` - sees assigned incidents and updates response status.
+- `barangay_officer` - manages incidents in their barangay and sends alerts.
+- `command_center_staff` - manages incident operations and dashboard data.
+- `admin` - full system management, users, reference data, settings.
+
+In some notes, "respondent" means `responder`.
+
+## Base Setup
+
+Development base URLs:
+
+| Android target | Base URL |
+| --- | --- |
+| Android emulator | `http://10.0.2.2:3000` |
+| Physical phone on same Wi-Fi | `http://<your-pc-lan-ip>:3000` |
+| Production | your deployed HTTPS URL |
+
+Protected endpoints require a Better Auth bearer token:
+
+```http
+Authorization: Bearer <session-token>
+Content-Type: application/json
+```
+
+For `multipart/form-data` photo upload, do not manually set `Content-Type`; let OkHttp set the boundary.
+
+Common error response:
+
+```json
+{
+  "error": "Validation failed",
+  "details": {}
+}
+```
+
+## Auth APIs
+
+All roles use the same Better Auth endpoints.
+
+| Method | Endpoint | Use |
+| --- | --- | --- |
+| `POST` | `/api/auth/sign-up/email` | Create account |
+| `POST` | `/api/auth/sign-in/email` | Log in |
+| `GET` / `POST` | `/api/auth/get-session` | Validate stored token |
+| `POST` | `/api/auth/sign-out` | Log out |
+
+Sign in example:
+
+```bash
+curl -X POST http://10.0.2.2:3000/api/auth/sign-in/email \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"password123"}'
+```
+
+Android stores the returned session token securely and sends it as:
+
+```kotlin
+fun authedRequest(url: String, token: String): Request.Builder =
+    Request.Builder()
+        .url(url)
+        .header("Authorization", "Bearer $token")
+```
+
+## Common APIs For All Signed-In Roles
+
+These endpoints are useful for residents, responders, staff, and admins.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/reference` | Barangays, categories, contacts, evacuation centers, statuses |
+| `GET` | `/api/mobile/me` | Current user and profile |
+| `PATCH` | `/api/mobile/me` | Update profile |
+| `POST` | `/api/mobile/devices` | Register FCM token |
+| `DELETE` | `/api/mobile/devices/{id}` | Remove FCM token |
+| `GET` | `/api/mobile/sync` | Pull offline-sync data |
+| `POST` | `/api/mobile/sync` | Push queued offline actions |
+| `GET` | `/api/notifications` | List notifications |
+| `PATCH` | `/api/notifications/{id}` | Mark notification read |
+| `GET` | `/api/alerts` | List visible alerts |
+| `POST` | `/api/alerts/{id}/read` | Mark alert read |
+
+Profile update body:
+
+```json
+{
+  "name": "Juan Dela Cruz",
+  "mobileNumber": "09171234567",
+  "barangayId": "brgy-ward-i",
+  "address": "Ward I",
+  "emergencyContactName": "Maria",
+  "emergencyContactNumber": "09170000000"
+}
+```
+
+Device token body:
+
+```json
+{
+  "token": "fcm-token-from-android",
+  "platform": "android",
+  "deviceId": "android-device-id",
+  "appVersion": "1.0.0"
+}
+```
+
+## Resident APIs
+
+Residents can create reports, upload evidence photos after sync, view their own reports, and read alerts/notifications.
+
+| Method | Endpoint | Resident use |
+| --- | --- | --- |
+| `POST` | `/api/incidents` | Create incident while online |
+| `GET` | `/api/incidents` | List own incidents |
+| `GET` | `/api/incidents/{id}` | View own incident details |
+| `PATCH` | `/api/incidents/{id}` | Edit own pending incident |
+| `POST` | `/api/incidents/{id}/photos` | Upload local photo after incident exists |
+| `GET` | `/api/incidents/{id}/photos/{photoId}` | Download protected photo |
+| `GET` | `/api/alerts` | Read targeted alerts |
+| `POST` | `/api/alerts/{id}/read` | Mark alert read |
+| `GET` | `/api/notifications` | Read notifications |
+
+Create incident body:
+
+```json
+{
+  "clientReportId": "local-report-uuid-1",
+  "clientCreatedAt": "2026-07-04T03:00:00.000Z",
+  "incidentCategoryId": "fire",
+  "title": "House fire",
+  "description": "Smoke seen near the road",
+  "latitude": 12.412,
+  "longitude": 124.279,
+  "locationAccuracy": 8,
+  "approximateAddress": "Ward I near municipal road",
+  "barangayId": "brgy-ward-i",
+  "severityLevel": "critical"
+}
+```
+
+Important: do not put image data in `POST /api/incidents`. Create/sync the incident first, then upload photos with multipart form data.
+
+Resident offline flow:
+
+1. Store report locally with `clientReportId`.
+2. Store photos locally with `clientPhotoId` and the same local report ID.
+3. When online, send report JSON using `POST /api/mobile/sync`.
+4. Read `serverId` from the sync result.
+5. Upload each queued photo to `POST /api/incidents/{serverId}/photos`.
+6. Pull updates with `GET /api/mobile/sync?since=<lastServerTime>`.
+
+## Responder APIs
+
+Responders see only incidents assigned to their responder profile. They can view details/photos and update status for assigned incidents.
+
+| Method | Endpoint | Responder use |
+| --- | --- | --- |
+| `GET` | `/api/incidents` | List assigned incidents |
+| `GET` | `/api/incidents/{id}` | View assigned incident details |
+| `GET` | `/api/incidents/{id}/photos/{photoId}` | Download protected photo for assigned incident |
+| `PATCH` | `/api/incidents/{id}/status` | Update assigned incident status |
+| `GET` | `/api/mobile/sync` | Pull assigned incidents and notifications |
+| `GET` | `/api/notifications` | Read assignment/status notifications |
+
+Status update body:
+
+```json
+{
+  "status": "responding",
+  "remarks": "Responder team is on the way"
+}
+```
+
+Allowed incident statuses:
+
+- `pending`
+- `verified`
+- `assigned`
+- `responding`
+- `resolved`
+- `archived`
+- `rejected`
+
+Responder notes:
+
+- A responder cannot assign themselves through the API.
+- A responder cannot see unassigned incidents unless they also have a staff/admin role.
+- A responder can update status only for incidents assigned to their responder record.
+
+## Barangay Officer APIs
+
+Barangay officers are operational staff for their barangay. They can view/manage incidents in their barangay, send alerts, and use dashboard views.
+
+| Method | Endpoint | Barangay officer use |
+| --- | --- | --- |
+| `GET` | `/api/incidents` | List incidents scoped to barangay/profile |
+| `GET` | `/api/incidents/{id}` | View allowed incident details |
+| `PATCH` | `/api/incidents/{id}` | Update allowed incident fields |
+| `PATCH` | `/api/incidents/{id}/status` | Verify/reject/update incident status |
+| `POST` | `/api/incidents/{id}/assignments` | Assign responder |
+| `GET` | `/api/dashboard/summary` | Dashboard summary |
+| `GET` | `/api/dashboard/map` | Map pins |
+| `GET` | `/api/dashboard/analytics` | Analytics |
+| `GET` | `/api/dashboard/heatmap` | Heatmap |
+| `POST` | `/api/alerts` | Send alert |
+
+Alert body:
+
+```json
+{
+  "title": "Flood warning",
+  "message": "Avoid low-lying areas",
+  "alertType": "weather",
+  "severityLevel": "high",
+  "targetType": "barangay",
+  "targetBarangayId": "brgy-ward-i"
+}
+```
+
+Assignment body:
+
+```json
+{
+  "responderId": "responder-id",
+  "assignedVehicle": "Ambulance 1",
+  "etaMinutes": 10,
+  "notes": "Proceed to Ward I"
+}
+```
+
+## Command Center Staff APIs
+
+Command center staff can manage incidents across the command center scope, assign responders, update statuses, send alerts, and view dashboards.
+
+| Method | Endpoint | Command center use |
+| --- | --- | --- |
+| `GET` | `/api/incidents` | List incidents |
+| `GET` | `/api/incidents/{id}` | View incident details |
+| `PATCH` | `/api/incidents/{id}` | Update incident fields |
+| `PATCH` | `/api/incidents/{id}/status` | Update status |
+| `POST` | `/api/incidents/{id}/assignments` | Assign responder |
+| `POST` | `/api/alerts` | Broadcast/target alerts |
+| `GET` | `/api/dashboard/summary` | Dashboard summary |
+| `GET` | `/api/dashboard/map` | Map pins |
+| `GET` | `/api/dashboard/analytics` | Analytics |
+| `GET` | `/api/dashboard/heatmap` | Heatmap |
+
+Command center staff do not automatically get admin CRUD access. Admin-only routes still require `admin`.
+
+## Admin APIs
+
+Admins can use all staff APIs plus system-management APIs under `/api/admin/*`.
+
+| Method | Endpoint | Admin use |
+| --- | --- | --- |
+| `GET` | `/api/admin/users` | List users |
+| `GET` | `/api/admin/users/{id}` | User details |
+| `PATCH` | `/api/admin/users/{id}` | Update role/profile/ban fields |
+| `GET` | `/api/admin/barangays` | List barangays |
+| `POST` | `/api/admin/barangays` | Create barangay |
+| `PATCH` | `/api/admin/barangays/{id}` | Update barangay |
+| `DELETE` | `/api/admin/barangays/{id}` | Delete barangay |
+| `GET` | `/api/admin/emergency-contacts` | List contacts |
+| `POST` | `/api/admin/emergency-contacts` | Create contact |
+| `PATCH` | `/api/admin/emergency-contacts/{id}` | Update contact |
+| `DELETE` | `/api/admin/emergency-contacts/{id}` | Deactivate contact |
+| `GET` | `/api/admin/evacuation-centers` | List centers |
+| `POST` | `/api/admin/evacuation-centers` | Create center |
+| `PATCH` | `/api/admin/evacuation-centers/{id}` | Update center |
+| `DELETE` | `/api/admin/evacuation-centers/{id}` | Deactivate center |
+| `GET` | `/api/admin/alert-templates` | List templates |
+| `POST` | `/api/admin/alert-templates` | Create template |
+| `PATCH` | `/api/admin/alert-templates/{id}` | Update template |
+| `DELETE` | `/api/admin/alert-templates/{id}` | Deactivate template |
+| `GET` | `/api/admin/settings` | Read settings |
+| `PATCH` | `/api/admin/settings` | Update settings |
+
+Admin user update body example:
+
+```json
+{
+  "role": "responder",
+  "banned": false,
+  "name": "Responder One",
+  "mobileNumber": "09171234567",
+  "barangayId": "brgy-ward-i"
+}
+```
+
+## Local Photo Uploads
+
+Photos are stored locally on the backend, not Cloudinary. The Android app stores photos locally while offline, then uploads them after the incident exists on the server.
+
+`POST /api/incidents/{incidentId}/photos`
+
+Request type: `multipart/form-data`
+
+Fields:
+
+- `file` - image file
+- `clientPhotoId` - stable UUID for the local photo
+
+Allowed MIME types:
+
+- `image/jpeg`
+- `image/png`
+- `image/webp`
+
+Default max size: 5 MB. Server env override: `MAX_INCIDENT_PHOTO_BYTES`.
+
+Curl example:
+
+```bash
+curl -X POST http://10.0.2.2:3000/api/incidents/server-incident-id/photos \
+  -H "Authorization: Bearer <session-token>" \
+  -F "clientPhotoId=local-photo-uuid-1" \
+  -F "file=@C:/path/to/photo.jpg;type=image/jpeg"
+```
+
+Kotlin/OkHttp upload example:
+
+```kotlin
+val body = MultipartBody.Builder()
+    .setType(MultipartBody.FORM)
+    .addFormDataPart("clientPhotoId", clientPhotoId)
+    .addFormDataPart(
+        "file",
+        "incident.jpg",
+        photoFile.asRequestBody("image/jpeg".toMediaType())
+    )
+    .build()
+
+val request = Request.Builder()
+    .url("$baseUrl/api/incidents/$incidentId/photos")
+    .header("Authorization", "Bearer $token")
+    .post(body)
+    .build()
+```
+
+Upload response:
+
+```json
+{
+  "duplicate": false,
+  "photo": {
+    "id": "server-photo-id",
+    "incidentReportId": "server-incident-id",
+    "clientPhotoId": "local-photo-uuid-1",
+    "mimeType": "image/jpeg",
+    "bytes": 123456,
+    "sha256": "...",
+    "downloadUrl": "/api/incidents/server-incident-id/photos/server-photo-id"
+  }
+}
+```
+
+Retry rule: sending the same `clientPhotoId` for the same incident returns the existing photo with `duplicate: true`.
+
+Protected photo download:
+
+`GET /api/incidents/{incidentId}/photos/{photoId}`
+
+This route requires the bearer token. If using Coil or Glide, configure the image request to include the auth header.
+
+```kotlin
+val request = Request.Builder()
+    .url("$baseUrl$downloadUrl")
+    .header("Authorization", "Bearer $token")
+    .get()
+    .build()
+```
+
+## Offline Sync Details
+
+`POST /api/mobile/sync`
+
+Supported operation types:
+
+- `create_incident`
+- `update_profile`
+- `register_device`
+
+Push body:
+
+```json
+{
+  "clientBatchId": "batch-uuid-1",
+  "deviceId": "android-device-id",
+  "operations": [
+    {
+      "clientOperationId": "op-uuid-1",
+      "type": "create_incident",
+      "payload": {
+        "clientReportId": "local-report-uuid-1",
+        "clientCreatedAt": "2026-07-04T03:00:00.000Z",
+        "incidentCategoryId": "fire",
+        "title": "House fire",
+        "description": "Smoke seen near the road",
+        "latitude": 12.412,
+        "longitude": 124.279,
+        "barangayId": "brgy-ward-i",
+        "severityLevel": "critical"
+      }
+    }
+  ]
+}
+```
+
+Sync response:
+
+```json
+{
+  "serverTime": "2026-07-04T03:01:00.000Z",
+  "duplicateBatch": false,
+  "results": [
+    {
+      "clientOperationId": "op-uuid-1",
+      "type": "create_incident",
+      "status": "created",
+      "serverId": "server-incident-id",
+      "clientReportId": "local-report-uuid-1"
+    }
+  ]
+}
+```
+
+Pull updates:
+
+`GET /api/mobile/sync?since=2026-07-04T03:01:00.000Z`
+
+Returns:
+
+- `serverTime`
+- `reference`
+- `incidents`
+- `incidentPhotos`
+- `alerts`
+- `alertRecipients`
+- `notifications`
+
+Store `serverTime` locally and use it as the next `since` cursor.
+
+## Role Access Summary
+
+| API group | Resident | Responder | Barangay officer | Command staff | Admin |
+| --- | --- | --- | --- | --- | --- |
+| Auth/profile/device/reference | yes | yes | yes | yes | yes |
+| Create own incident | yes | supported | supported | supported | supported |
+| View incident | own only | assigned only | allowed barangay | staff scope | all staff/admin scope |
+| Upload/view incident photos | own incident | assigned incident | allowed incident | allowed incident | allowed incident |
+| Update incident status | no | assigned only | yes | yes | yes |
+| Assign responders | no | no | yes | yes | yes |
+| Send alerts | no | no | yes | yes | yes |
+| Dashboard APIs | no | no | yes | yes | yes |
+| `/api/admin/*` CRUD | no | no | no | no | yes |
+
+## Environment Needed
+
+Minimum `.env`:
+
+```env
+DATABASE_URL="postgresql://san_antonio_safe:san_antonio_safe_password@localhost:5432/san_antonio_safe"
+BETTER_AUTH_SECRET="change-this-to-a-long-random-secret"
+BETTER_AUTH_URL="http://localhost:3000"
+BETTER_AUTH_TRUSTED_ORIGINS="http://localhost:3000,http://10.0.2.2:3000"
+NEXT_PUBLIC_AUTH_BASE_URL="http://localhost:3000"
+LOCAL_UPLOAD_DIR="storage/uploads/incidents"
+MAX_INCIDENT_PHOTO_BYTES="5242880"
+FIREBASE_SERVICE_ACCOUNT_JSON_BASE64=""
+SEED_ADMIN_EMAIL="admin@example.com"
+```
+
+For a physical phone, add your PC LAN URL to `BETTER_AUTH_TRUSTED_ORIGINS`, for example `http://192.168.1.20:3000`.

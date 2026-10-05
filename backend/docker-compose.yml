@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.5-alpine
+    container_name: san-antonio-safe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: san_antonio_safe
+      POSTGRES_USER: san_antonio_safe
+      POSTGRES_PASSWORD: san_antonio_safe_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U san_antonio_safe -d san_antonio_safe"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

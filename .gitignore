@@ -1,0 +1,31 @@
+# Local configuration and credentials
+**/.env
+**/.env.*
+!**/.env.example
+**/*firebase-adminsdk*.json
+**/*service-account*.json
+**/key.properties
+*.pem
+*.key
+*.jks
+*.keystore
+# Dependencies, generated files, and private runtime data
+**/node_modules/
+**/.next/
+**/.dart_tool/
+**/build/
+**/coverage/
+**/storage/
+**/.idea/
+**/.vscode/
+**/.gradle/
+**/.cxx/
+**/ephemeral/
+**/local.properties
+**/Generated.xcconfig
+**/flutter_export_environment.sh
+**/.flutter-plugins-dependencies
+*.iml
+*.log
+*.tsbuildinfo
+.DS_Store

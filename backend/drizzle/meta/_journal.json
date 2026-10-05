@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1783130710326,
+      "tag": "0000_remarkable_blob",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783134651597,
+      "tag": "0001_fat_post",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783135850256,
+      "tag": "0002_moaning_zaladane",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783139506716,
+      "tag": "0003_local_photo_storage",
+      "breakpoints": true
+    }
+  ]
+}
